@@ -48,6 +48,11 @@
 #define __SCLK 5//15
 
 /********************************
+ * *****OLED screen define*******
+ * ******************************/
+#define PHOTO_CELL_PIN 39
+int photo_pin=0;
+/********************************
  * *********RTC define***********
  * ******************************/
 #if defined(ARDUINO_ARCH_SAMD)
@@ -59,7 +64,6 @@
  *******RTC initialization*******
  ********************************/
 RTC_Millis rtc;
-int nextFlag;
 DateTime now;
 
 /********************************
@@ -85,48 +89,56 @@ const int mqttPort = 12888;
 const char* mqttUser = "nlxnwobb";
 const char* mqttPassword = "I_acCzjITPYj";
 char device_id[50]="48:174:164:55:85:12";
-int verify=0,verified_flat=0;
-int timeout=20, isHold=0,message_flat=0;
-int pushflat=0;
-char mqttMessage[500];
-char *mqtt_topic;
-int ignor=0;
+int verify=          0,
+    verified_flat=   0,
+    timeout=         20, 
+    isHold=          0,
+    message_flat=    0,
+    pushflat=        0,
+    ignor=           0;
+char mqttMessage[500],
+    *mqtt_topic;
 
 /************************************
  ************MOTOR INIT*************
  ************************************/
-#define PWMA          14 //H-Bridge
-#define AIN1          15 //H-Bridge
-#define AIN2          32 //H-Bridge
-#define FREQENCY      500 //for PWM configuration
-#define RESOLUTION    8  //for PWM configuration
-#define MOTOR_CHANNEL 0//for PWM configuration
-#define ENCODER_PINC2  33
-#define ENCODER_PINC1  27
-#define MAXIMUM_DURATION 10
-#define MAXIMUM_POWER    160
-int max_duration=MAXIMUM_DURATION, max_power=MAXIMUM_POWER;
-int motor_flat=0;
-int temp1=0;
-int temp2=0;
+#define PWMA              14 //H-Bridge
+#define AIN1              15 //H-Bridge
+#define AIN2              32 //H-Bridge
+#define FREQENCY          500 //for PWM configuration
+#define RESOLUTION        8  //for PWM configuration
+#define MOTOR_CHANNEL     0//for PWM configuration
+#define ENCODER_PINC2     33
+#define ENCODER_PINC1     27
+#define MAXIMUM_DURATION  50
+#define MAXIMUM_POWER     200
+int max_duration=         MAXIMUM_DURATION, 
+    max_power=            MAXIMUM_POWER,
+    motor_flat=           0,
+    temp1=                0,
+    temp2=                0,
+    duration=             0,//the number of the pulses boolean Direction;//the rotation direction
+    lastDuration=         0,
+    power;
 byte encoder0PinALast;
-int duration=0;//the number of the pulses boolean Direction;//the rotation direction
-int lastDuration=0;
 bool Direction;
-int power;
+
 /************************************
  *************other init************
  ************************************/
-#define SCANNER_BUTTON 12
-#define CONTROL_BUTTON 4
-int is_interrupt=0;
-int numPills=40;
-int timeNextPills=10; //in second
-int nextSec=0,nextHour=0, nextMin=0;
-int nextDoseTime = 0;
-int nextDoseIn = 30;
-int states=1;
-int scanBut=0,controlBut=0,but_read=0;
+#define SCANNER_BUTTON  12
+#define CONTROL_BUTTON  4
+#define BATTERY_VOLTAGE 35
+int numPills=       40,
+    nextSec=        0,
+    nextHour=       0, 
+    nextMin=        0,
+    nextDoseTime=   0,
+    nextDoseIn=     100,
+    states=         1,//Menu ID
+    scanBut=        0,
+    controlBut=     0,
+    but_read=       0;
 
 
 /*********************************************
@@ -146,33 +158,36 @@ void setup() {
   /*********************************setup FingerPrint*******************************/
   fps.Open();
   fps.SetLED(false);
-  Serial.print("Enroll count: ");
-  Serial.println(fps.GetEnrollCount());
+  //uncomment if need to delete all finger
+  //fps.DeleteAll();
 
   /***********************************Setup Button*******************************/
-  pinMode(SCANNER_BUTTON,INPUT);
-  pinMode(CONTROL_BUTTON,INPUT);
-  attachInterrupt(digitalPinToInterrupt(SCANNER_BUTTON),scannerState,RISING);
-  attachInterrupt(digitalPinToInterrupt(CONTROL_BUTTON),controlState,RISING);
-  pinMode(35,INPUT);
+  pinMode(SCANNER_BUTTON,INPUT);  //Setup SCANNER_BUTTON pin as input
+  pinMode(CONTROL_BUTTON,INPUT);  //Setup CONTROL_BUTTON pin as input
+  pinMode(BATTERY_VOLTAGE,INPUT); //setup BATTERY_VOLTAGE pin as input
+  attachInterrupt(digitalPinToInterrupt(SCANNER_BUTTON),scannerState,RISING); // attach interrupt signal to SCANNER_BUTTON pin
+  attachInterrupt(digitalPinToInterrupt(CONTROL_BUTTON),controlState,RISING); // attach interrupt signal to CONTROL_BUTTON pin
+  
   /********Motor Setup***********/
-  ledcAttachPin(PWMA,MOTOR_CHANNEL);
-  ledcSetup(MOTOR_CHANNEL, FREQENCY, RESOLUTION);
-  pinMode(AIN1, OUTPUT);
-  pinMode(AIN2, OUTPUT);
-  pinMode(ENCODER_PINC2, INPUT_PULLUP);
-  Direction = true;//default -> Forward
-  pinMode(ENCODER_PINC1, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_PINC1), wheelSpeed, CHANGE);
-  //attachInterrupt(digitalPinToInterrupt(ENCODER_PINC2), wheelSpeed2, CHANGE);
-   starUpScreen();
-   
-  /******8*****************************WIFI SETUP*******************************/
+  ledcAttachPin(PWMA,MOTOR_CHANNEL);                //attach pin to PWM signal
+  ledcSetup(MOTOR_CHANNEL, FREQENCY, RESOLUTION);   //Setup PWM signal
+  pinMode(AIN1, OUTPUT);                            //Setup AN1 pin as output to the MOTOR controller
+  pinMode(AIN2, OUTPUT);                            //Setup AN2 pin as output to the MOTOR controller
+  pinMode(ENCODER_PINC2, INPUT_PULLUP);             //Setup ENCODER_PINC2 pin as inout from the MOTOR 
+  Direction = true;                                 //default -> Forward
+  pinMode(ENCODER_PINC1, INPUT_PULLUP);             //Setup ENCODER_PINC1 pin as inout from the MOTOR 
+  attachInterrupt(digitalPinToInterrupt(ENCODER_PINC1), wheelSpeed, CHANGE); //attatch ENCODER_PIN to interrupt signal
+  starUpScreen(); //display startup screen
+  
+  /***********************************WIFI SETUP*******************************/
   Serial.print("Connect to network: ");
   Serial.println(ssid);
-  //WiFi.begin("RT-AC1200_C8_2G","sonandy2004");
-  WiFi.begin(ssid);// connect to wifi
-  int connect_flat=1;
+  //if wifi has password use this function: WiFi.begin(SSID,password);
+  WiFi.begin(ssid);       // connect to wifi
+  int connect_flat=1;     //falt is to know whether the WiFi is connected
+  /*  check if the device successfully connect to WiFi. 
+   *  Timeout period is 10 second. If the time expires, the device will ignore the connection
+   */
   while (WiFi.status() != WL_CONNECTED){
     if(timeout<0)
     {
@@ -190,32 +205,36 @@ void setup() {
     Serial.println("unable to connect to Wifi");
   
   /*************************************MQTT SETUP************************************/
-  client.setServer(mqttServer, mqttPort);
-  client.setCallback(callback);
-  while (!client.connected()) 
+  client.setServer(mqttServer, mqttPort); //connect to server
+  client.setCallback(callback); //set callback function, so whenever the device receives the message from MQTT broker, the callback function is called.
+  //Timeout period is 10 second. If the time expires, the device will ignore the connection
+  if(connect_flat==1)
   {
-    if(timeout<0)
+    while (!client.connected()) 
     {
-      Serial.println("Unable to connect to wifi");
-      break;
+      if(timeout<0)
+      {
+        Serial.println("Unable to connect to wifi");
+        break;
+      }
+  
+      Serial.println("Connecting to MQTT...");
+      
+      if (client.connect("ESP32Client", mqttUser, mqttPassword )) 
+      {
+        Serial.println("connected");
+      } 
+      else 
+      {
+        Serial.print("failed with state ");
+        Serial.println(client.state());
+      }
+      timeout--;
+      delay(500);
     }
-
-    Serial.println("Connecting to MQTT...");
-    
-    if (client.connect("ESP32Client", mqttUser, mqttPassword )) 
-    {
-      Serial.println("connected");
-    } 
-    else 
-    {
-      Serial.print("failed with state ");
-      Serial.println(client.state());
-    }
-    timeout--;
-    delay(500);
+    client.subscribe("esp/phoneToEsp");
   }
   timeout=20;
-  client.subscribe("esp/phoneToEsp");
   delay(2000);
   
   /******************************************START UP**************************/
@@ -230,10 +249,11 @@ void setup() {
 void loop() {
   
   client.loop();//start up MQTT LOOP
-  
+  delay(500);
   /*************************CONTROL BUTTON PRESS**************************/
   if(controlBut==1)
   {
+    delay(50);
     Serial.print("states before displayMenu= ");
     Serial.println(states);
     controlBut=0;
@@ -246,7 +266,7 @@ void loop() {
     }
     else if (states==2)
     {
-      int tempHour, tempMin, tempSec, tempTime;
+      int tempTime;
       DateTime nextDose(nextDoseTime);
       while(scanBut==0 && controlBut==0)
       { 
@@ -257,27 +277,40 @@ void loop() {
         tft.setTextColor(WHITE);
         tft.println("Next pill in:");
         tft.setCursor(10,20);
-        now=rtc.now();
+        //now=rtc.now();
         //clockDisplay(now.hour(),now.minute(),now.second());
-        tempHour=nextHour-now.hour();
-        tempMin=nextMin-now.minute();
-        tempSec=nextSec-now.second();
-        tempTime = nextDose.unixtime() - now.unixtime();
+        tempTime = nextDose.unixtime()-now.unixtime();
         if(isNeg(tempTime))
           tft.print(0, DEC);
         else
+        {
+          Serial.print("Next hour");  Serial.println(nextDose.hour());
+          Serial.print("now hour");   Serial.println(now.hour());
           tft.print(nextDose.hour()-now.hour(), DEC);
+        }
         tft.print(':');
+        
         if(isNeg(tempTime))
           tft.print(0, DEC);
         else
+        {
+          Serial.print("Next minute");  Serial.println(nextDose.minute());
+          Serial.print("now minute");   Serial.println(now.minute());
           tft.print(nextDose.minute()-now.minute(), DEC);
+        }
         tft.print(':');
+        
         if(isNeg(tempTime))
           tft.print(0, DEC);
         else
+        {
+          int temp= now.second*(nextDose.minute()-now.minute());
+          Serial.print("Next second");  Serial.println(nextDose.second());
+          Serial.print("now second");   Serial.println(now.second());
           tft.print(nextDose.second()-now.second(),DEC);
+        }
         delay(500);
+        
         Serial.print("controlBut= ");Serial.println(controlBut);
         Serial.print("scanBut= ");Serial.println(scanBut);
       }
@@ -291,7 +324,7 @@ void loop() {
     {
       displayWiFiStatus();
     }
-    delay(10);
+    
   }
 
   /*************************************SCANNER BUTTON PUSH/HOLD**************************/
@@ -330,7 +363,6 @@ void loop() {
       verify_finger();
     }
     scanBut=0; 
-    //displayMenu();
     displayNumPills();
   }
 
@@ -376,26 +408,15 @@ void loop() {
 }
 
 
-
+//Interrupted function for control button
 void controlState()
 {
   controlBut=1;
   scanBut=0;
 
 }
-void setNextState()
-{
-  if(states==1)
-    states=2;
-  else if(states==2)
-    states=3;
-  else if(states==3)
-    states=4;
-  else if(states==4)
-    states=1;
-  else
-    states=1;
-}
+
+//Interrupted function for fingerprint button
 void scannerState()
 {
   if(verified_flat!=1)
@@ -405,6 +426,33 @@ void scannerState()
   }
 }
 
+//Set next menu for the display
+/*  states=1 display number of pills
+ *  states=2 display remaining time
+ *  states=3 display battery level
+ *  states=4 display WiFi status
+ */
+void setNextState()
+{
+  if(controlBut==0)
+  {
+    if(states==1)
+      states=2;
+    else if(states==2)
+      states=3;
+    else if(states==3)
+      states=4;
+    else if(states==4)
+      states=1;
+    else
+      states=1;
+  }
+}
+
+//checking if input is negative
+/*  @input: input of the function
+ *  @return: return true if input is negative, else return false
+ */
 bool isNeg(int input)
 {
   if(input<0)return true;
@@ -460,15 +508,17 @@ void enroll()
         if (iret == 0)
         {
           displayEnrollMesssage(4); //display (enroll successful)
+          delay(1000);
         }
         else if(iret>0)
         {
           displayEnrollMesssage(5); //display (already enroll this finger)
+          delay(1000);
         }
         else
         {
          displayEnrollMesssage(6); //display(fail to enroll)
-         
+         delay(1000);
         }
       }
       else 
@@ -494,7 +544,7 @@ void enroll()
     displayEnrollMesssage(9); //display(TRY AGAIN)
     delay(1000);
   }
-
+  
   attachInterrupt(digitalPinToInterrupt(SCANNER_BUTTON),scannerState,RISING);
   attachInterrupt(digitalPinToInterrupt(CONTROL_BUTTON),controlState,RISING);
   fps.SetLED(false);  //turn off the LED in the finger print scanner
@@ -551,37 +601,22 @@ void dispense()
 {
   int flat=0;
   now=rtc.now();
-
-  
   Serial.println("now.unixtime()");
   Serial.println(now.unixtime());
   if(now.unixtime()>=nextDoseTime)
   {
     Serial.println(nextDoseTime);
     Serial.println(now.unixtime());    
-
-        flat=1;
-    
+    flat=1;
   }
   Serial.println(flat);
   if(flat==1)
-  {
-    Serial.print("Next hour "); Serial.println(nextHour);
-    Serial.print("now.hour ");  Serial.println(now.hour());
-    Serial.print("next min ");  Serial.println(nextMin);
-    Serial.print("now.min ");   Serial.println(now.minute());
-    Serial.print("nextsec ");   Serial.println(nextSec);
-    Serial.print("now second"); Serial.println(now.second());
-    
+  {    
     Serial.println("DISPENSING");
     printTextMessage("Dispensing");
-    nextSec=now.second()+timeNextPills;
     nextDoseTime = now.unixtime()+ nextDoseIn;
-    Serial.print("Next hour "); Serial.println(nextHour);
     Serial.print("now.hour ");  Serial.println(now.hour());
-    Serial.print("next min ");  Serial.println(nextMin);
     Serial.print("now.min ");   Serial.println(now.minute());
-    Serial.print("nextsec ");   Serial.println(nextSec);
     Serial.print("now second "); Serial.println(now.second());
     char temp[10];
     numPills--;
@@ -614,89 +649,107 @@ void dispense()
 void wheelSpeed() {
   motor_flat=1;
   temp1=temp2;
+  duration++;
 }
+
+void backward() {
+  digitalWrite(AIN1, HIGH);
+  digitalWrite(AIN2, LOW);
+  ledcWrite(MOTOR_CHANNEL, 80);
+}
+
 void motor() {
-  //add pwr=35, duration=40 for #1 helix
-  max_duration=MAXIMUM_DURATION;
-  max_power=MAXIMUM_POWER;
-  power=95;
-  int adjust_power=55;
-  int counter=0;
-  if(numPills<=2)
+  int stuck_prevention_power=   70,
+      stuck_prevention_counter= 0,
+      adjust_power=             80,
+      counter=                  0,
+      adjust_flat=              0;
+      
+  max_duration= MAXIMUM_DURATION;
+  max_power=    MAXIMUM_POWER;
+  power=        70;
+  duration=     0;
+  lastDuration= 0;
+  
+  if(numPills<=2)//used when there is only 2 pills remain
   {
     max_duration=8;
     max_power=80;
   }
-  int adjust_flat=0;
   digitalWrite(AIN1, LOW);
   digitalWrite(AIN2, HIGH);
-  Serial.println("in motor function");
-  Serial.print("power= ");
-  Serial.println(power);
-  Serial.print("duration= ");
-  Serial.println(duration);
-  Serial.print("flat ");
-  Serial.println(motor_flat);
-  //ledcWrite(MOTOR_CHANNEL, adjust_power);
-  //delay(40);
-  duration = 0;
-  lastDuration=0;
-  /*
+  Serial.println("in motor function"); 
+  Serial.print("power= ");    Serial.println(power);
+  Serial.print("duration= "); Serial.println(duration);
+  Serial.print("flat ");      Serial.println(motor_flat);
+
+  //start adjusting phase
+  ledcWrite(MOTOR_CHANNEL, 200);
+  delay(1000);
   while(adjust_flat==0)
   {
     tft.defineScrollArea(1,0,64,0,0);
     tft.scroll(true);
-    Serial.println("adjust");
-    Serial.print("temp1= ");
-    Serial.println(temp1);
-    Serial.print("temp2= ");
-    Serial.println(temp2);
-    counter++;
+    Serial.println("adjust phase");
+    Serial.print("temp1= ");  Serial.println(temp1);
+    Serial.print("temp2= ");  Serial.println(temp2);
+    if(numPills==1 && counter>=40)
+    {
+       adjust_flat=0;
+       break;
+    }
     ledcWrite(MOTOR_CHANNEL, adjust_power);
     delay(40);
     if(temp1==temp2)
     {
       temp1++;
-      if(numPills==1 && counter>=40)
-      {
-         adjust_flat=0;
-         break;
-      }
     }
     else
     {
       adjust_flat=1;
       temp1=0;
       temp2=0;
+      duration=0;
       ledcWrite(MOTOR_CHANNEL, 0);
       break;
     }
   }
+  //end adjusting period
+
+  //transition from adjusting phase to dispensing phase
   delay(500);
   ledcWrite(MOTOR_CHANNEL, power);
-  */
-  while ((duration < max_duration) && (power < max_power)) 
+  delay(10);
+  //start dispensing phase
+  while ((duration < max_duration)) 
   {
-    tft.defineScrollArea(1,0,64,0,0);
-    tft.scroll(true);
-  
+    //scrolling dispensing text
+    tft.defineScrollArea(1,0,64,0,0); //config scrolling
+    tft.scroll(true);                 //activate scrolling
+    power++;
     ledcWrite(MOTOR_CHANNEL, power);
-    Serial.print("Power:"); 
-    Serial.print(power); 
-    Serial.print("  duration:");
-    Serial.print(duration); 
-    Serial.print("  last:"); 
-    Serial.println(lastDuration);
-    Serial.print(" motor_flat:"); 
-    Serial.println(motor_flat);
-    /*if(duration==lastDuration)
-    {
-      power++;
-    }*/
-    
-    lastDuration = duration;
     delay(10);
-    if(motor_flat==1)
+   /* if(lastDuration==duration)
+    {
+      if(stuck_prevention_counter==0)
+        stuck_prevention_power=power;
+      stuck_prevention_counter++;
+    }
+    else
+    {
+      if(stuck_prevention_counter>5)
+      {
+        power=power-10;
+        Serial.println("adjusting power");
+      }
+      stuck_prevention_counter=0;
+    }
+    if(stuck_prevention_counter>70)//prevent stucking forever
+    {
+      Serial.println("stuck_prevention_counter>40");
+      break;
+    }
+    if(motor_flat==1)// if motor move increase tje duration
     {
       int Lstate = digitalRead(ENCODER_PINC2);
       if ((encoder0PinALast == LOW) && Lstate == HIGH) 
@@ -709,16 +762,36 @@ void motor() {
       }
       encoder0PinALast = Lstate;
       lastDuration = duration;
-      duration++;
+      
       motor_flat=0;
     }
-    /*else
+    else if(power<=max_power)
     {
-      power++;
+      power+=1;
+      ledcWrite(MOTOR_CHANNEL, power);
+      delay(10);
+    }
+    else
+    {
+      ledcWrite(MOTOR_CHANNEL, power);
+      delay(10);
     }*/
+
+    //to detect whether the motor stucks at one postion for a long period of time
+
+
+    Serial.print("Power: ");                    Serial.print(power); 
+    Serial.print("  duration: ");               Serial.print(duration); 
+    Serial.print("  lastDuration: ");           Serial.println(lastDuration);
+    Serial.print("motor_flat: ");              Serial.println(motor_flat);
+    Serial.print("stuck_prevention_counter: "); Serial.println(stuck_prevention_counter);
+    Serial.print("stuck_prevention_power: ");   Serial.println(stuck_prevention_power);
+    Serial.println();
+    Serial.println();
   }
+  
   backward();
-  delay(100);
+  delay(4000);
   power=0;
   duration=0;
   lastDuration=0;
@@ -727,12 +800,6 @@ void motor() {
   digitalWrite(AIN2, LOW);
   delay(40);
 }
-void backward() {
-  digitalWrite(AIN1, HIGH);
-  digitalWrite(AIN2, LOW);
-  ledcWrite(MOTOR_CHANNEL, 60);
-}
-
 
 /*******************************************************************************
 *************************************MQTTT CALL BACK FUNCTION*******************
@@ -783,6 +850,7 @@ void decode_message(char *topic, char *message)
     char key1[]="password";
     char key2[]="request";
     char key3[]="set_pill";
+    char key4[]="set_time";
     Serial.println("extract message");
     //parse the message
     JsonObject& parsed=JSONBuffer.parseObject(message);
@@ -799,11 +867,14 @@ void decode_message(char *topic, char *message)
     else
     {
       Serial.println("Parsed success");
-      bool hashKey1=parsed.containsKey(key1);
-      bool hashKey2=parsed.containsKey(key2);
-      bool hashKey3=parsed.containsKey(key3);
+      bool hashKey1=parsed.containsKey(key1); //looking for key in parsed messages
+      bool hashKey2=parsed.containsKey(key2); //looking for key in parsed messages
+      bool hashKey3=parsed.containsKey(key3); //looking for key in parsed messages
+      bool hashKey4=parsed.containsKey(key4); //looking for key in parsed messages
       Serial.print("hashKey1= ");Serial.println(hashKey1);
       Serial.print("hashKey2=");Serial.println(hashKey2);
+      Serial.print("hashKey2=");Serial.println(hashKey3);
+      Serial.print("hashKey2=");Serial.println(hashKey4);
       if(hashKey1==true && verified_flat==1)
       {
         const char *id=parsed[key1];
@@ -834,6 +905,18 @@ void decode_message(char *topic, char *message)
         Serial.print("new numPills= "); Serial.println(id);
         int temp=atoi(id);
         Serial.print("new numPills= "); Serial.println(temp);
+        numPills=temp;
+        Serial.println("display number of pills"); 
+        Serial.print("states= ");
+        Serial.println(states);
+        displayNumPills();
+      }
+      else if(hashKey4==true)
+      {
+        const char *id=parsed[key3];
+        Serial.print("new time= "); Serial.println(id);
+        int temp=atoi(id); //convert string to integer
+        Serial.print("new time= "); Serial.println(temp);
         numPills=temp;
         Serial.println("display number of pills"); 
         Serial.print("states= ");
@@ -991,9 +1074,9 @@ void diplayVerifyMessage(int message_code)
     tft.setTextScale(2);
     tft.setTextColor(RED);
     tft.setCursor(0,0);
-    tft.println("FINGER");
-    tft.println("NOT");
-    tft.println("FOUND");
+    tft.println("Finger");
+    tft.println("Not");
+    tft.println("Authorize");
   }
   else if(message_code==3)
   {
@@ -1002,8 +1085,8 @@ void diplayVerifyMessage(int message_code)
     tft.setTextScale(2);
     tft.setTextColor(RED);
     tft.setCursor(0,0);
-    tft.println("CANNOT");
-    tft.println("DISPENSE");
+    tft.println("WRONG");
+    tft.println("TIME");
   }
 }
 
