@@ -1,4 +1,4 @@
- #include "CharactersLib.h"
+#define DEBUG 1
  /********************************
  * *****OLED screen library******
  * ******************************/
@@ -38,7 +38,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ArduinoJson.h>
- 
+/********************************
+*********DEEP SLEEP library***********
+* ******************************/
+#include "esp_deep_sleep.h"
 
 /********************************
  * *********RTC define***********
@@ -50,6 +53,7 @@
 RTC_Millis rtc;
 DateTime now;
 
+#define STR_LENGTH  50
 /********************************
  ***OLED screen initialization***
  ********************************/
@@ -71,17 +75,17 @@ FPS_GT511C3 fps(2); // chose UART 2
 WiFiClient espClient;
 PubSubClient client(espClient);
 int inval_flat=0;
-const char* ssid = "UCInet Mobile Access";
-const char* password = "CalPlug:)";
+//const char* ssid = "UCInet Mobile Access";
+char ssid[STR_LENGTH] = "NETGEAR44";
+char passwords[STR_LENGTH] = "xuatcanh01";
 const char* mqttServer = "m12.cloudmqtt.com";
 const int mqttPort = 12888;
 const char* mqttUser = "nlxnwobb";
 const char* mqttPassword = "I_acCzjITPYj";
-char device_id[50]="48:174:164:55:85:12";
+char device_id[STR_LENGTH]="48:174:164:55:85:12";
 int verify=          0,
     verified_flat=   0,
     timeout=         20, 
-    isHold=          0,
     message_flat=    0,
     pushflat=        0,
     ignor=           0;
@@ -107,10 +111,7 @@ int max_duration=         MAXIMUM_DURATION,
     temp1=                0,
     temp2=                0,
     duration=             0,//the number of the pulses boolean Direction;//the rotation direction
-    lastDuration=         0,
     power;
-byte encoder0PinALast;
-bool Direction;
 
 /************************************
  *************other init************
@@ -118,23 +119,34 @@ bool Direction;
 #define SCANNER_BUTTON  12
 #define CONTROL_BUTTON  4
 #define BATTERY_VOLTAGE 35
-int numPills=       40,
-    nextSec=        0,
-    nextHour=       0, 
-    nextMin=        0,
+#define MAX_NUMBER_OF_PILLS 30
+#define SLEEP_TIME 30 //amount of time before sleep
+int numPills=       40, //number of pills
     nextDoseTime=   0,
-    nextDoseIn=     30,
-    states=         1,//Menu ID
-    scanBut=        0,
-    controlBut=     0,
-    but_read=       0;
-
+    nextDoseIn=     30, //time to next pills in seconds
+    states=         1,  //Menu ID
+    scanBut=        0,  //scanner button flat
+    controlBut=     0,  //control button flat
+    but_read=       0,  // button press flat
+    sleep_counter=  0,
+    set_state=      0;
+RTC_DATA_ATTR int bootCount = 0;      //number of boots and reboots
+RTC_DATA_ATTR int numPills_sleep =0; //memorize number of pills during sleep
+RTC_DATA_ATTR char ssid_sleep[STR_LENGTH];      //number of boots and reboots
+RTC_DATA_ATTR char passwords_sleep[STR_LENGTH]; //memorize number of pills during sleep
 
 /*********************************************
 **************SET UP FUNCTION******************
 **********************************************/
 void setup() {
   Serial.begin(9600);// set baud rate
+  if(bootCount>0)
+  {
+    numPills=numPills_sleep;
+    strcpy(ssid,ssid_sleep);
+    strcpy(passwords,passwords_sleep);
+  }
+  esp_deep_sleep_enable_ext0_wakeup(GPIO_NUM_12,HIGH);
   
   /*********************************setup oled screen*******************************/
   tft.begin();
@@ -163,7 +175,6 @@ void setup() {
   pinMode(AIN1, OUTPUT);                            //Setup AN1 pin as output to the MOTOR controller
   pinMode(AIN2, OUTPUT);                            //Setup AN2 pin as output to the MOTOR controller
   pinMode(ENCODER_PINC2, INPUT_PULLUP);             //Setup ENCODER_PINC2 pin as inout from the MOTOR 
-  Direction = true;                                 //default -> Forward
   pinMode(ENCODER_PINC1, INPUT_PULLUP);             //Setup ENCODER_PINC1 pin as inout from the MOTOR 
   attachInterrupt(digitalPinToInterrupt(ENCODER_PINC1), wheelSpeed, CHANGE); //attatch ENCODER_PIN to interrupt signal
   starUpScreen(); //display startup screen
@@ -172,7 +183,7 @@ void setup() {
   Serial.print("Connect to network: ");
   Serial.println(ssid);
   //if wifi has password use this function: WiFi.begin(SSID,password);
-  WiFi.begin(ssid);       // connect to wifi
+  WiFi.begin(ssid,passwords);       // connect to wifi
   int connect_flat=1;     //falt is to know whether the WiFi is connected
   /*  check if the device successfully connect to WiFi. 
    *  Timeout period is 10 second. If the time expires, the device will ignore the connection
@@ -183,15 +194,22 @@ void setup() {
       connect_flat=0;
       break;
     }
-    Serial.println("Connecting to Wifi.....");
+    
+//#ifdef DEBUG
+      Serial.println("Connecting to Wifi.....");
+//#endif
+
     timeout--;
     delay(500);
   }
   timeout=20;
-  if(connect_flat==1)
-    Serial.println("Connected to the WiFi network");
-  else
-    Serial.println("unable to connect to Wifi");
+  
+#ifdef DEBUG
+    if(connect_flat==1)
+      Serial.println("Connected to the WiFi network");
+    else
+      Serial.println("unable to connect to Wifi");
+#endif
   
   /*************************************MQTT SETUP************************************/
   client.setServer(mqttServer, mqttPort); //connect to server
@@ -203,20 +221,26 @@ void setup() {
     {
       if(timeout<0)
       {
+#ifdef DEBUG
         Serial.println("Unable to connect to wifi");
+#endif
         break;
       }
-  
+#ifdef DEBUG
       Serial.println("Connecting to MQTT...");
-      
+#endif     
       if (client.connect("ESP32Client", mqttUser, mqttPassword )) 
       {
+#ifdef DEBUG
         Serial.println("connected");
+#endif
       } 
       else 
       {
+#ifdef DEBUG        
         Serial.print("failed with state ");
         Serial.println(client.state());
+#endif
       }
       timeout--;
       delay(500);
@@ -239,25 +263,33 @@ void loop() {
   
   client.loop();//start up MQTT LOOP
   delay(500);
-  /*************************CONTROL BUTTON PRESS**************************/
+ 
+  /*************************CONTROL BUTTON PRESS/HOLD**************************/
   if(controlBut==1)
   {
-    bool isHold=false;
     controlBut=0;
-    delay(50);
-    but_read=digitalRead(CONTROL_BUTTON);
-    if(but_read==HIGH)
+    if(isHold(CONTROL_BUTTON))  //hold
     {
-      delay(3000);
-      but_read=digitalRead(CONTROL_BUTTON);
-      if(but_read==HIGH)
-        isHold=true;
+      set_state=1;
+      //set number of pills.
+      if(states==1)
+      {
+#ifdef DEBUG
+        Serial.println("holding");
+#endif
+        fps.SetLED(true);
+        while(!isHold(CONTROL_BUTTON))
+        {
+          displaySetPills();
+          delay(500);
+        }
+      }
+      set_state=0;
+      displayNumPills();
+      fps.SetLED(false);
+      
     }
-    if(isHold)
-    {
-      getNumner();
-    }
-    else
+    else  //single press
     {
       setNextState();
       if (states==1)
@@ -279,15 +311,15 @@ void loop() {
           tft.println("Next pill in:");
           tft.setCursor(10,20);
           now=rtc.now();
-          //clockDisplay(now.hour(),now.minute(),now.second());
           tempTime = nextDose.unixtime()-now.unixtime();
           
           if(isNeg(tempTime))
             tft.print("0:00:00");
-  
-          else{
+          else
+          {
             toHour = tempTime;
-            if(toHour/3600 < 10){
+            if(toHour/3600 < 10)
+            {
               tft.print("0");
               tft.print(toHour/3600);
             }
@@ -295,7 +327,8 @@ void loop() {
               tft.print(toHour/3600);
             tft.print(":");
             toMin = tempTime%3600;
-            if(toMin/60 < 10){
+            if(toMin/60 < 10)
+            {
               tft.print("0");
               tft.print(toMin/60);
             }
@@ -310,41 +343,15 @@ void loop() {
             else
               tft.print(toSec);
           }
-          /*if(isNeg(tempTime))
-            tft.print(0, DEC);
-          else
-          {
-            Serial.print("Next hour");  Serial.println(nextDose.hour());
-            Serial.print("now hour");   Serial.println(now.hour());
-            tft.print(nextDose.hour()-now.hour(), DEC);
-          }
-          tft.print(':');
-          
-          if(isNeg(tempTime))
-            tft.print(0, DEC);
-          else
-          {
-            Serial.print("Next minute");  Serial.println(nextDose.minute());
-            Serial.print("now minute");   Serial.println(now.minute());
-            tft.print(nextDose.minute()-now.minute(), DEC);
-          }
-          tft.print(':');
-          
-          if(isNeg(tempTime))
-            tft.print(0, DEC);
-          else
-          {
-            //int temp= now.second*(nextDose.minute()-now.minute());
-            Serial.print("Next second");  Serial.println(nextDose.second());
-            Serial.print("now second");   Serial.println(now.second());
-            tft.print(nextDose.second()-now.second(),DEC);
-          }*/
           delay(500);
-          
+#ifdef DEBUG          
           Serial.print("controlBut= ");Serial.println(controlBut);
           Serial.print("scanBut= ");Serial.println(scanBut);
+#endif
         }
+#ifdef DEBUG
         Serial.println("Exit time to next pills");
+#endif
       }
       else if(states==3)
       {
@@ -355,40 +362,16 @@ void loop() {
         displayWiFiStatus();
       }      
     }
-
-    
   }
 
   /*************************************SCANNER BUTTON PUSH/HOLD**************************/
   if(scanBut==1)
   {
-    delay(500);
+#ifdef DEBUG
     Serial.println("Scanner state");
-    int isEnroll=0;
-    but_read=digitalRead(SCANNER_BUTTON);
-    Serial.print("but_read= ");
-    Serial.println(but_read);
-    if(but_read==HIGH)
-    {
-      Serial.println("button is high in hold");
-      delay(3000);
-      but_read=digitalRead(SCANNER_BUTTON);
-      if(but_read==HIGH)
-      {
-        isEnroll=1;
-      }
-    }
-    if(isEnroll==1){
-      /*char key[50]="password";
-      char value[50]="0";
-      char topic[50]="esp/espToPhone";
-      send_message(key,value,topic);
-      Serial.println("wait for the verification");
-      printTextMessage("Verify through phone");
-      verified_flat=1;*/
-      fps.SetLED(true);
+#endif
+    if(isHold(SCANNER_BUTTON)){
       enroll();
-      
     }
     else
     {
@@ -398,7 +381,6 @@ void loop() {
     displayNumPills();
   }
 
-  
   /*******************************ENROLL VERIFICATION(NOT READY) **************************/
   if(message_flat==1)
   {
@@ -408,56 +390,138 @@ void loop() {
   }
   if(verified_flat==1)
   {
+#ifdef DEBUG
     Serial.print("verified_flat= ");Serial.println(verified_flat);
+#endif
     if(timeout<0)
     {
+#ifdef DEBUG
       Serial.println("timeout, cannot verify");
+#endif
       timeout=20;
       verified_flat=0;
       fps.SetLED(false);
     }
     if(verify==1)
     {
+#ifdef DEBUG
       Serial.println("verified id");
+#endif
       enroll();
       timeout=10;
       verified_flat=0;
       verify=0;
-      //displayMenu();
       displayNumPills();
     }
     if(verify==0 && timeout>=0)
     {
       printTextMessage("verifying.....");
+#ifdef DEBUG
       Serial.println("verifying.....");
+#endif
     }
     timeout--;
     delay(500);
   }
-
-
-  /******************************THE END OF MAIN LOOP**************************/
+   /*************************checking for sleep time**************************/
+  if(sleep_counter>SLEEP_TIME*2) //*2 because the 1 loop is 0.5 second
+  {
+    numPills_sleep=numPills;
+    strcpy(ssid_sleep,ssid);
+    strcpy(passwords_sleep,passwords);
+    //turn off the screen
+    tft.fillRect(0,0,96,64,BLACK);
+    tft.fillRect(0,0,96,64,BLACK);
+    //Go to sleep now
+    Serial.println("Going to sleep now");
+    esp_deep_sleep_start();
+    Serial.println("This will never be printed");
+    
+  }
+  sleep_counter++;
+  
 }
+/******************************THE END OF MAIN LOOP**************************/
+
+
 
 
 //Interrupted function for control button
 void controlState()
 {
-  controlBut=1;
-  scanBut=0;
+  sleep_counter=0;
+  if(!set_state)
+  {
+    controlBut=1;
+    scanBut=0;
+  }
 
 }
 
 //Interrupted function for fingerprint button
 void scannerState()
 {
-  if(verified_flat!=1)
+  sleep_counter=0;
+  if(!set_state)
   {
-    scanBut=1;
-    controlBut=0;
+    if(verified_flat!=1)
+    {
+      scanBut=1;
+      controlBut=0;
+    }
   }
+   else
+   {
+    if(states==1)
+    {
+      if(numPills<MAX_NUMBER_OF_PILLS)
+         numPills++;
+      else 
+        numPills=0;
+    }  
+   }
+
+  
 }
 
+
+bool isHold(int button_pin)
+{
+  int but_read;
+  bool is_hold=false;
+  delay(100);
+  // checking for hold action
+  but_read=digitalRead(button_pin);
+  if(but_read==HIGH)
+  {
+    delay(3000);
+    but_read=digitalRead(button_pin);
+    if(but_read==HIGH)
+      is_hold=true;
+  }
+  return is_hold;
+}
+
+void print_wakeup_reason() {
+  esp_deep_sleep_wakeup_cause_t wakeup_reason;
+
+  wakeup_reason = esp_deep_sleep_get_wakeup_cause();
+
+  Serial.println("");
+  Serial.println("");
+  Serial.println("");
+  Serial.println("EXT0 Test");
+
+  switch (wakeup_reason)
+  {
+    case 1  : Serial.println("Wakeup caused by external signal using RTC_IO"); break;
+    case 2  : Serial.println("Wakeup caused by external signal using RTC_CNTL"); break;
+    case 3  : Serial.println("Wakeup caused by timer"); break;
+    case 4  : Serial.println("Wakeup caused by touchpad"); break;
+    case 5  : Serial.println("Wakeup caused by ULP program"); break;
+    default : Serial.println("Wakeup was not caused by deep sleep"); break;
+  }
+}
 //Set next menu for the display
 /*  states=1 display number of pills
  *  states=2 display remaining time
@@ -469,15 +533,15 @@ void setNextState()
   if(controlBut==0)
   {
     if(states==1)
-      states=2;
+      states=2;     //timer menu
     else if(states==2)
-      states=3;
+      states=3;      //battery level menu
     else if(states==3)
-      states=4;
-    else if(states==4)
-      states=1;
+      states=4;     //Wifi menu
+    else if(states==4)  
+      states=1;     //number of pills menu
     else
-      states=1;
+      states=1;   //number of pills menu
   }
 }
 
@@ -633,23 +697,29 @@ void dispense()
 {
   int flat=0;
   now=rtc.now();
+#ifdef DEBUG
   Serial.println("now.unixtime()");
   Serial.println(now.unixtime());
+#endif
+
   if(now.unixtime()>=nextDoseTime)
   {
+#ifdef DEBUG
     Serial.println(nextDoseTime);
-    Serial.println(now.unixtime());    
+    Serial.println(now.unixtime()); 
+#endif   
     flat=1;
   }
+#ifdef DEBUG
   Serial.println(flat);
+#endif
   if(flat==1)
-  {    
+  {
+#ifdef DEBUG
     Serial.println("DISPENSING");
+#endif
     printTextMessage("Dispensing");
     nextDoseTime = now.unixtime()+ nextDoseIn;
-    Serial.print("now.hour ");  Serial.println(now.hour());
-    Serial.print("now.min ");   Serial.println(now.minute());
-    Serial.print("now second "); Serial.println(now.second());
     char temp[10];
     numPills--;
     sprintf(temp,"%d",numPills);
@@ -663,16 +733,9 @@ void dispense()
   }
   else
   {
-    Serial.print("Next hour "); Serial.println(nextHour);
-    Serial.print("now.hour ");  Serial.println(now.hour());
-    Serial.print("next min ");  Serial.println(nextMin);
-    Serial.print("now.min ");   Serial.println(now.minute());
-    Serial.print("nextsec ");   Serial.println(nextSec);
-    Serial.print("now second"); Serial.println(now.second());
     diplayVerifyMessage(3);
     delay(3000);
   }
-  
 }
 
 /*********************************************************************************
@@ -691,9 +754,7 @@ void backward() {
 }
 
 void motor() {
-  int stuck_prevention_power=   70,
-      stuck_prevention_counter= 0,
-      adjust_power=             80,
+  int adjust_power=             80,
       counter=                  0,
       adjust_flat=              0;
       
@@ -701,7 +762,6 @@ void motor() {
   max_power=    MAXIMUM_POWER;
   power=        70;
   duration=     0;
-  lastDuration= 0;
   
   if(numPills<=2)//used when there is only 2 pills remain
   {
@@ -711,10 +771,11 @@ void motor() {
   digitalWrite(AIN1, LOW);
   digitalWrite(AIN2, HIGH);
   Serial.println("in motor function"); 
+#ifdef DEBUG
   Serial.print("power= ");    Serial.println(power);
   Serial.print("duration= "); Serial.println(duration);
   Serial.print("flat ");      Serial.println(motor_flat);
-
+#endif
   //start adjusting phase
   ledcWrite(MOTOR_CHANNEL, 200);
   delay(1000);
@@ -722,9 +783,11 @@ void motor() {
   {
     tft.defineScrollArea(1,0,64,0,0);
     tft.scroll(true);
+#ifdef DEBUG
     Serial.println("adjust phase");
     Serial.print("temp1= ");  Serial.println(temp1);
     Serial.print("temp2= ");  Serial.println(temp2);
+#endif
     if(numPills==1 && counter>=40)
     {
        adjust_flat=0;
@@ -752,6 +815,7 @@ void motor() {
   delay(500);
   ledcWrite(MOTOR_CHANNEL, power);
   delay(10);
+  
   //start dispensing phase
   while ((duration < max_duration)) 
   {
@@ -761,72 +825,18 @@ void motor() {
     power++;
     ledcWrite(MOTOR_CHANNEL, power);
     delay(10);
-   /* if(lastDuration==duration)
-    {
-      if(stuck_prevention_counter==0)
-        stuck_prevention_power=power;
-      stuck_prevention_counter++;
-    }
-    else
-    {
-      if(stuck_prevention_counter>5)
-      {
-        power=power-10;
-        Serial.println("adjusting power");
-      }
-      stuck_prevention_counter=0;
-    }
-    if(stuck_prevention_counter>70)//prevent stucking forever
-    {
-      Serial.println("stuck_prevention_counter>40");
-      break;
-    }
-    if(motor_flat==1)// if motor move increase tje duration
-    {
-      int Lstate = digitalRead(ENCODER_PINC2);
-      if ((encoder0PinALast == LOW) && Lstate == HIGH) 
-      {
-        int val = digitalRead(ENCODER_PINC1);
-        if (val == LOW && Direction)
-          Direction = false; //Reverse
-        else if (val == HIGH && !Direction)
-          Direction = true; //Forward
-      }
-      encoder0PinALast = Lstate;
-      lastDuration = duration;
-      
-      motor_flat=0;
-    }
-    else if(power<=max_power)
-    {
-      power+=1;
-      ledcWrite(MOTOR_CHANNEL, power);
-      delay(10);
-    }
-    else
-    {
-      ledcWrite(MOTOR_CHANNEL, power);
-      delay(10);
-    }*/
-
-    //to detect whether the motor stucks at one postion for a long period of time
-
-
+    
+#ifdef DEBUG
     Serial.print("Power: ");                    Serial.print(power); 
     Serial.print("  duration: ");               Serial.print(duration); 
-    Serial.print("  lastDuration: ");           Serial.println(lastDuration);
-    Serial.print("motor_flat: ");              Serial.println(motor_flat);
-    Serial.print("stuck_prevention_counter: "); Serial.println(stuck_prevention_counter);
-    Serial.print("stuck_prevention_power: ");   Serial.println(stuck_prevention_power);
     Serial.println();
-    Serial.println();
+#endif
   }
   
   backward();
   delay(4000);
   power=0;
   duration=0;
-  lastDuration=0;
   motor_flat=0;
   digitalWrite(AIN1, LOW);
   digitalWrite(AIN2, LOW);
@@ -841,29 +851,38 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.println("In call back");
   if(ignor==0)
   {
+#ifdef DEBUG
     Serial.println("ignore the first message");
+#endif
+
     ignor=1;
     return;
   }
   else
   {
+#ifdef DEBUG
     Serial.print("Message arrived in topic: ");
     Serial.println(topic);
-  
     Serial.print("Message:");
-    for (int i = 1; i <length-1; i++) {
+#endif
+    //copy from payload to tempoary message
+    for (int i = 1; i <length-1; i++) 
+    {
+#ifdef DEBUG
       Serial.println((char)payload[i]);
+#endif
       mqttMessage[i-1]=(char)payload[i];
     }
     Serial.println();
     
-    //copy from payload to tempoary message
+#ifdef DEBUG
     for (int i = 0; i < length-2; i++) {
       Serial.print(mqttMessage[i]);
     }
+    Serial.println();
+#endif
     message_flat=1;
     mqtt_topic=topic;
-    Serial.println();
   }
 }
 
@@ -873,8 +892,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
 void decode_message(char *topic, char *message)
 {
   StaticJsonBuffer<300> JSONBuffer;
+#ifdef DEBUG
   Serial.print("topic: ");
   Serial.println(topic);
+#endif
   
   if(strcmp(topic,"esp/phoneToEsp")==0)
   {
@@ -883,14 +904,18 @@ void decode_message(char *topic, char *message)
     char key2[]="request";
     char key3[]="set_pill";
     char key4[]="set_time";
+#ifdef DEBUG
     Serial.println("extract message");
+#endif
     //parse the message
     JsonObject& parsed=JSONBuffer.parseObject(message);
     //Check for errors in parsing
     delay(100);
     if (!parsed.success()) 
     {   
+#ifdef DEBUG
       Serial.println("Parsing failed");
+#endif
       message_flat=0;
       verified_flat=0;
       timeout=20;
@@ -898,33 +923,43 @@ void decode_message(char *topic, char *message)
     }
     else
     {
+#ifdef DEBUG
       Serial.println("Parsed success");
+#endif
       bool hashKey1=parsed.containsKey(key1); //looking for key in parsed messages
       bool hashKey2=parsed.containsKey(key2); //looking for key in parsed messages
       bool hashKey3=parsed.containsKey(key3); //looking for key in parsed messages
       bool hashKey4=parsed.containsKey(key4); //looking for key in parsed messages
+#ifdef DEBUG
       Serial.print("hashKey1= ");Serial.println(hashKey1);
       Serial.print("hashKey2=");Serial.println(hashKey2);
       Serial.print("hashKey2=");Serial.println(hashKey3);
       Serial.print("hashKey2=");Serial.println(hashKey4);
+#endif
       if(hashKey1==true && verified_flat==1)
       {
         const char *id=parsed[key1];
         value=strdup(id);
+#ifdef DEBUG
         Serial.print("key= ");
         Serial.print(key1);
         Serial.println("Done extract");
         Serial.println("value");
         Serial.println(value);
         Serial.println(verify);
+#endif
         if(strcmp(value,"1")==0)
           verify=1;
+#ifdef DEBUG
         Serial.println(verify);
+#endif
       }
       else if(hashKey2==true)
       {
         const char *id=parsed[key1];
+#ifdef DEBUG
         Serial.println("send request");
+#endif
         char temp[10];
         sprintf(temp,"%d",numPills);
         char temp_topic[]="esp/espToPhone";
@@ -934,32 +969,51 @@ void decode_message(char *topic, char *message)
       else if(hashKey3==true)
       {
         const char *id=parsed[key3];
+#ifdef DEBUG
         Serial.print("new numPills= "); Serial.println(id);
+#endif
         int temp=atoi(id);
+#ifdef DEBUG        
         Serial.print("new numPills= "); Serial.println(temp);
+#endif
         numPills=temp;
+        
+#ifdef DEBUG        
         Serial.println("display number of pills"); 
         Serial.print("states= ");
         Serial.println(states);
+#endif        
+
         displayNumPills();
       }
       else if(hashKey4==true)
       {
         const char *id=parsed[key3];
+        
+#ifdef DEBUG
         Serial.print("new time= "); Serial.println(id);
+#endif
+
         int temp=atoi(id); //convert string to integer
+
+#ifdef DEBUG
         Serial.print("new time= "); Serial.println(temp);
+#endif
         numPills=temp;
+#ifdef DEBUG
         Serial.println("display number of pills"); 
         Serial.print("states= ");
         Serial.println(states);
+#endif
         displayNumPills();
       }
     }
   }
   else if(strcmp(topic,"esp/serverToEsp")==0)
   {
+#ifdef DEBUG
     Serial.println("get message from the server");
+#endif
   }
 }
 
@@ -974,9 +1028,11 @@ void send_message(char *key, char *value, char*topic)
   JSONencoder["registration_id"]=device_id;
   JSONencoder[key]=value;
   JSONencoder.printTo(JSONmessageBuffer,sizeof(JSONmessageBuffer));
+#ifdef DEBUG
   Serial.print("Sending message to MQTT topic: ");
   Serial.println(topic);
   Serial.println(JSONmessageBuffer);
+#endif
   client.publish(topic,JSONmessageBuffer);
 }
 
@@ -1001,9 +1057,6 @@ void printNumMessage(int m)
 }
 void displayNumPills()
 {
-    Serial.println("display number of pills"); 
-    Serial.print("states= ");
-    Serial.println(states);
     tft.fillRect(0,0,96,64,BLACK);
     tft.fillRect(0,0,96,64,BLACK);
     tft.setCursor(0,0);
@@ -1012,7 +1065,22 @@ void displayNumPills()
     tft.setCursor(5,0);
     tft.println("Remaining");
     tft.setCursor(30,20);
-    tft.println("pills:");
+    tft.println("Pills:");
+    tft.setCursor(35,40);
+    tft.println(numPills);
+}
+void displaySetPills()
+{
+    tft.fillRect(0,0,96,64,BLACK);
+    tft.fillRect(0,0,96,64,BLACK);
+    tft.setCursor(0,0);
+    tft.setTextScale(2);
+    tft.setTextColor(BLUE);
+    tft.setCursor(20,0);
+    tft.println("Setting");
+    tft.setCursor(30,20);
+    tft.println("Pills:");
+     tft.setTextColor(RED);
     tft.setCursor(35,40);
     tft.println(numPills);
 }
