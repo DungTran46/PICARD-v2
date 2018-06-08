@@ -21,6 +21,7 @@
 #include "nvs.h"
 #include "esp_partition.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <sys/time.h>
 
 //Undocumented!!! Get chip temperature in Farenheit
@@ -37,26 +38,14 @@ void yield()
     vPortYield();
 }
 
-portMUX_TYPE microsMux = portMUX_INITIALIZER_UNLOCKED;
-
 unsigned long IRAM_ATTR micros()
 {
-    static unsigned long lccount = 0;
-    static unsigned long overflow = 0;
-    unsigned long ccount;
-    portENTER_CRITICAL_ISR(&microsMux);
-    __asm__ __volatile__ ( "rsr     %0, ccount" : "=a" (ccount) );
-    if(ccount < lccount){
-        overflow += UINT32_MAX / CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ;
-    }
-    lccount = ccount;
-    portEXIT_CRITICAL_ISR(&microsMux);
-    return overflow + (ccount / CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ);
+    return (unsigned long) esp_timer_get_time();
 }
 
 unsigned long IRAM_ATTR millis()
 {
-    return xTaskGetTickCount() * portTICK_PERIOD_MS;
+    return (unsigned long) (esp_timer_get_time() / 1000);
 }
 
 void delay(uint32_t ms)

@@ -40,15 +40,13 @@ public:
     void begin(unsigned long baud, uint32_t config=SERIAL_8N1, int8_t rxPin=-1, int8_t txPin=-1, bool invert=false);
     void end();
     int available(void);
+    int availableForWrite(void);
     int peek(void);
     int read(void);
     void flush(void);
     size_t write(uint8_t);
     size_t write(const uint8_t *buffer, size_t size);
-	int getUartNum();
-	int getRxPin();
-	int getTxPin();
-	void changeBaud(unsigned long baud);
+
     inline size_t write(const char * s)
     {
         return write((uint8_t*) s, strlen(s));
@@ -77,9 +75,10 @@ public:
 protected:
     int _uart_nr;
     uart_t* _uart;
-	int _rxPin, _txPin;
 };
 
+#if !defined(NO_GLOBAL_INSTANCES) && !defined(NO_GLOBAL_SERIAL)
 extern HardwareSerial Serial;
+#endif
 
 #endif

@@ -5,7 +5,9 @@
 
 #include "HardwareSerial.h"
 
+#if !defined(NO_GLOBAL_INSTANCES) && !defined(NO_GLOBAL_SERIAL)
 HardwareSerial Serial(0);
+#endif
 
 HardwareSerial::HardwareSerial(int uart_nr) : _uart_nr(uart_nr), _uart(NULL) {}
 
@@ -30,16 +32,8 @@ void HardwareSerial::begin(unsigned long baud, uint32_t config, int8_t rxPin, in
         rxPin = 16;
         txPin = 17;
     }
-	_rxPin=rxPin;
-	_txPin=txPin;
     _uart = uartBegin(_uart_nr, baud, config, rxPin, txPin, 256, invert);
 }
-
-int HardwareSerial::getUartNum(){return _uart_nr;}
-
-int HardwareSerial::getRxPin(){return _rxPin;}
-
-int HardwareSerial::getTxPin(){return _txPin;}
 
 void HardwareSerial::end()
 {
@@ -68,6 +62,10 @@ int HardwareSerial::available(void)
 {
     return uartAvailable(_uart);
 }
+int HardwareSerial::availableForWrite(void)
+{
+    return uartAvailableForWrite(_uart);
+}
 
 int HardwareSerial::peek(void)
 {
@@ -79,17 +77,12 @@ int HardwareSerial::peek(void)
 
 int HardwareSerial::read(void)
 {
-	int temp;
-	temp=available();
-    if(temp) {
+    if(available()) {
         return uartRead(_uart);
     }
     return -1;
 }
-void HardwareSerial::changeBaud(unsigned long baud)
-{
-	uartChangeBaudRateParity(_uart_nr, baud);
-}
+
 void HardwareSerial::flush()
 {
     uartFlush(_uart);
@@ -103,7 +96,7 @@ size_t HardwareSerial::write(uint8_t c)
 
 size_t HardwareSerial::write(const uint8_t *buffer, size_t size)
 {
-	uartWriteBuf(_uart, buffer, size);
+    uartWriteBuf(_uart, buffer, size);
     return size;
 }
 uint32_t  HardwareSerial::baudRate()

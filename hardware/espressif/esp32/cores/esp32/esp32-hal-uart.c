@@ -242,14 +242,18 @@ void uartEnd(uart_t* uart)
 
 uint32_t uartAvailable(uart_t* uart)
 {
+    if(uart == NULL || uart->queue == NULL) {
+        return 0;
+    }
+    return uxQueueMessagesWaiting(uart->queue);
+}
+
+uint32_t uartAvailableForWrite(uart_t* uart)
+{
     if(uart == NULL) {
         return 0;
     }
-	else if(uart->queue == NULL)
-	{
-		return -1;
-	}
-    return uxQueueMessagesWaiting(uart->queue);
+    return 0x7f - uart->dev->status.txfifo_cnt;
 }
 
 uint8_t uartRead(uart_t* uart)
@@ -330,14 +334,7 @@ void uartSetBaudRate(uart_t* uart, uint32_t baud_rate)
     uart->dev->clk_div.div_frag = clk_div & 0xf;
     UART_MUTEX_UNLOCK();
 }
-void uartChangeBaudRateParity(uint8_t uart_nr, uint32_t baudrate)
-{
-	if(uart_nr > 2) {
-		return; //Not return NULL
-	}
-	uart_t* uart = &_uart_bus_array[uart_nr];
-	uartSetBaudRate(uart, baudrate);
-}
+
 uint32_t uartGetBaudRate(uart_t* uart)
 {
     if(uart == NULL) {

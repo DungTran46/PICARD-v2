@@ -55,12 +55,13 @@ uart_t* uartBegin(uint8_t uart_nr, uint32_t baudrate, uint32_t config, int8_t rx
 void uartEnd(uart_t* uart);
 
 uint32_t uartAvailable(uart_t* uart);
+uint32_t uartAvailableForWrite(uart_t* uart);
 uint8_t uartRead(uart_t* uart);
 uint8_t uartPeek(uart_t* uart);
 
 void uartWrite(uart_t* uart, uint8_t c);
 void uartWriteBuf(uart_t* uart, const uint8_t * data, size_t len);
-void uartChangeBaudRateParity(uint8_t uart_nr, uint32_t baudrate);
+
 void uartFlush(uart_t* uart);
 
 void uartSetBaudRate(uart_t* uart, uint32_t baud_rate);
